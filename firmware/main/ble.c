@@ -234,6 +234,21 @@ static esp_err_t ble_trim_save_offset(void) {
 
 int8_t ble_get_trim_offset(void) { return ble_trim_offset; }
 
+esp_err_t ble_set_trim_offset(int8_t offset) {
+  if (offset < -127) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  int8_t previous_offset = ble_trim_offset;
+  ble_trim_offset = offset;
+  esp_err_t err = ble_trim_save_offset();
+  if (err != ESP_OK) {
+    ble_trim_offset = previous_offset;
+    return err;
+  }
+  ESP_LOGI(GATTC_TAG, "BLE trim offset set to: %d", ble_trim_offset);
+  return ESP_OK;
+}
+
 esp_err_t ble_increase_trim_offset(void) {
   if (ble_trim_offset < 127) {
     ble_trim_offset++;
@@ -263,6 +278,13 @@ void ble_toggle_aux_output(void) {
   aux_output_save_state();
   ESP_LOGI(GATTC_TAG, "Aux output toggled: %s",
            aux_output_state ? "ON" : "OFF");
+}
+
+esp_err_t ble_set_aux_output_state(bool enabled) {
+  aux_output_state = enabled;
+  aux_output_save_state();
+  ESP_LOGI(GATTC_TAG, "Aux output set: %s", aux_output_state ? "ON" : "OFF");
+  return ESP_OK;
 }
 
 bool ble_get_aux_output_state(void) { return aux_output_state; }

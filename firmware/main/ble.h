@@ -50,6 +50,7 @@ int get_bms_battery_percentage(void);
 void ble_toggle_aux_output(void);
 bool ble_get_aux_output_state(void);
 bool ble_get_receiver_aux_output_state(void);
+esp_err_t ble_set_aux_output_state(bool enabled);
 
 // Trip odometer (stored on receiver)
 float ble_get_latest_trip_km(void);
@@ -59,6 +60,7 @@ esp_err_t ble_send_reset_odometer(void);
 
 // BLE trim offset control
 int8_t ble_get_trim_offset(void);
+esp_err_t ble_set_trim_offset(int8_t offset);
 esp_err_t ble_increase_trim_offset(void);
 esp_err_t ble_decrease_trim_offset(void);
 

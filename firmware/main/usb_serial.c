@@ -11,6 +11,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "power.h"
+#include "serial_terminal.h"
 #include "target_config.h"
 #include "throttle.h"
 #include "ui_updater.h"
@@ -194,12 +195,20 @@ static void usb_serial_task(void *pvParameters) {
 
     uint8_t data = (uint8_t)byte;
 
+    if (serial_terminal_is_active()) {
+      serial_terminal_process_byte(data);
+      vTaskDelay(USB_CDC_TASK_DELAY_MS / portTICK_PERIOD_MS);
+      continue;
+    }
+
     switch (rx_state) {
     case STATE_WAIT_START:
       if (data == PACKET_START_BYTE) {
         rx_state = STATE_WAIT_CMD;
         rx_payload_index = 0;
         memset(&rx_packet, 0, sizeof(rx_packet));
+      } else {
+        serial_terminal_process_byte(data);
       }
       break;
 

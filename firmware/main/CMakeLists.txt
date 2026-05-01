@@ -33,6 +33,8 @@ idf_component_register(
         "lcd.c"
         "main.c"
         "power.c"
+        "serial_terminal.c"
+        "settings_registry.c"
         "throttle.c"
         "ui_updater.c"
         "usb_serial.c"
