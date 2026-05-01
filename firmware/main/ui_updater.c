@@ -590,8 +590,14 @@ void ui_show_splash_then_home(void) {
              TARGET_NAME);
     lv_label_set_text(objects.firmware_text, version_str);
   }
+  lcd_set_backlight(0);
   lv_disp_load_scr(objects.splash_screen);
   lv_obj_invalidate(objects.splash_screen);
+
+  lv_timer_t *fade_timer =
+      lv_timer_create(splash_fade_up_timer_cb, SPLASH_FADE_UP_DELAY_MS, NULL);
+  lv_timer_set_repeat_count(fade_timer, 1);
+
   lv_timer_t *t = lv_timer_create(splash_timer_cb, 1200, NULL);
   lv_timer_set_repeat_count(t, 1);
 }
