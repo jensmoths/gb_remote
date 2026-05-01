@@ -3,6 +3,7 @@
 
 #include "esp_err.h"
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #define DEVICE_NAME "GS-THUMB"
@@ -18,7 +19,8 @@
 #define NEUTRAL_HOLD_MS 1000       // Hold neutral after connection
 
 // BLE Security Configuration
-#define BLE_PASSKEY 483265 // Fixed passkey for pairing (must match server)
+#define BLE_PASSKEY 483265 // Legacy default passkey for pairing
+#define BLE_PAIRING_PHRASE_MAX_LEN 32
 
 #define PROFILE_NUM 1
 #define PROFILE_APP_ID 0
@@ -63,6 +65,15 @@ int8_t ble_get_trim_offset(void);
 esp_err_t ble_set_trim_offset(int8_t offset);
 esp_err_t ble_increase_trim_offset(void);
 esp_err_t ble_decrease_trim_offset(void);
+
+// BLE pairing phrase control. Empty phrase means legacy BLE_PASSKEY fallback.
+esp_err_t ble_pairing_init(void);
+esp_err_t ble_get_pairing_phrase(char *out, size_t out_len);
+esp_err_t ble_set_pairing_phrase(const char *phrase);
+esp_err_t ble_clear_pairing_phrase(void);
+uint32_t ble_get_pairing_passkey(void);
+uint32_t ble_phrase_to_passkey(const char *phrase);
+esp_err_t ble_clear_bonds(void);
 
 /** Enter charging screen from full mode: stop BLE (disconnect, stop scan). */
 void ble_enter_charging_mode(void);

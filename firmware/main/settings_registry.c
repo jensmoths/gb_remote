@@ -53,42 +53,81 @@ static esp_err_t set_shutdown_feedback_ms(const char *value, char *out,
 static esp_err_t get_auto_off_timeout_s(char *out, size_t out_len);
 static esp_err_t set_auto_off_timeout_s(const char *value, char *out,
                                         size_t out_len);
+static esp_err_t get_ble_pairing_phrase(char *out, size_t out_len);
+static esp_err_t dump_get_ble_pairing_phrase(char *out, size_t out_len);
+static esp_err_t set_ble_pairing_phrase(const char *value, char *out,
+                                        size_t out_len);
+static esp_err_t get_ble_pairing_phrase_clear(char *out, size_t out_len);
+static esp_err_t set_ble_pairing_phrase_clear(const char *value, char *out,
+                                              size_t out_len);
+static esp_err_t get_ble_clear_bonds(char *out, size_t out_len);
+static esp_err_t set_ble_clear_bonds(const char *value, char *out,
+                                     size_t out_len);
 
 typedef esp_err_t (*setting_getter_t)(char *out, size_t out_len);
 typedef esp_err_t (*setting_setter_t)(const char *value, char *out,
                                       size_t out_len);
+typedef esp_err_t (*setting_dump_getter_t)(char *out, size_t out_len);
 
 typedef struct {
   const char *name;
+  const char *default_value;
   const char *help;
   setting_getter_t get;
   setting_setter_t set;
+  setting_dump_getter_t dump_get;
 } setting_entry_t;
 
+#ifdef CONFIG_TARGET_LITE
+#define DEFAULT_INVERT_THROTTLE "off"
+#else
+#define DEFAULT_INVERT_THROTTLE "unsupported"
+#endif
+
 static const setting_entry_t settings[] = {
-    {"speed_unit", "Speed unit: kmh or mph", get_speed_unit, set_speed_unit},
-    {"backlight", "LCD backlight percent: 0..100", get_backlight,
-     set_backlight},
-    {"haptic_intensity", "Haptic vibration intensity percent: 0..100",
-     get_haptic_intensity, set_haptic_intensity},
-    {"ble_trim", "BLE neutral trim offset: -127..127", get_ble_trim,
-     set_ble_trim},
-    {"invert_throttle", "Lite only. Invert throttle: on/off",
-     get_invert_throttle, set_invert_throttle},
-    {"aux_output", "Remembered auxiliary output state: on/off", get_aux_output,
-     set_aux_output},
-    {"shutdown_hold_ms", "Shutdown hold time: 100..5000 ms",
-     get_shutdown_hold_ms, set_shutdown_hold_ms},
-    {"button_double_press_ms", "Double-press window: 50..1000 ms",
-     get_button_double_press_ms, set_button_double_press_ms},
-    {"shutdown_arm_window_ms", "Time after first tap to start shutdown hold: 300..10000 ms",
-     get_shutdown_arm_window_ms, set_shutdown_arm_window_ms},
-    {"shutdown_animation_ms", "Shutdown bar animation time: 100..10000 ms",
-     get_shutdown_animation_ms, set_shutdown_animation_ms},
-    {"shutdown_feedback_ms", "Delay after shutdown bar completes: 0..2000 ms",
-     get_shutdown_feedback_ms, set_shutdown_feedback_ms},
-    {"auto_off_timeout_s", "Auto power-off timeout: 0 disables, 0..3600 s",
-     get_auto_off_timeout_s, set_auto_off_timeout_s},
+    {"speed_unit", "kmh", "Speed unit: kmh or mph (default: kmh)",
+     get_speed_unit, set_speed_unit, NULL},
+    {"backlight", "50", "LCD backlight percent: 0..100 (default: 50)",
+     get_backlight, set_backlight, NULL},
+    {"haptic_intensity", "100",
+     "Haptic vibration intensity percent: 0..100 (default: 100)",
+     get_haptic_intensity, set_haptic_intensity, NULL},
+    {"ble_trim", "0", "BLE neutral trim offset: -127..127 (default: 0)",
+     get_ble_trim, set_ble_trim, NULL},
+    {"ble_pairing_phrase", "",
+     "BLE pairing phrase: 1..32 printable chars (default: legacy passkey)",
+     get_ble_pairing_phrase, set_ble_pairing_phrase,
+     dump_get_ble_pairing_phrase},
+    {"ble_pairing_phrase_clear", "action",
+     "Action: set to 1 to clear phrase and use legacy passkey",
+     get_ble_pairing_phrase_clear, set_ble_pairing_phrase_clear, NULL},
+    {"ble_clear_bonds", "action",
+     "Action: set to 1 to remove stored BLE bonds before re-pairing",
+     get_ble_clear_bonds, set_ble_clear_bonds, NULL},
+    {"invert_throttle", DEFAULT_INVERT_THROTTLE,
+     "Lite only. Invert throttle: on/off (default: off)",
+     get_invert_throttle, set_invert_throttle, NULL},
+    {"aux_output", "off",
+     "Remembered auxiliary output state: on/off (default: off)",
+     get_aux_output, set_aux_output, NULL},
+    {"shutdown_hold_ms", "300",
+     "Shutdown hold time: 100..5000 ms (default: 300)",
+     get_shutdown_hold_ms, set_shutdown_hold_ms, NULL},
+    {"button_double_press_ms", "150",
+     "Double-press window: 50..1000 ms (default: 150)",
+     get_button_double_press_ms, set_button_double_press_ms, NULL},
+    {"shutdown_arm_window_ms", "1200",
+     "Time after first tap to start shutdown hold: 300..10000 ms (default: 1200)",
+     get_shutdown_arm_window_ms, set_shutdown_arm_window_ms, NULL},
+    {"shutdown_animation_ms", "650",
+     "Shutdown bar animation time: 100..10000 ms (default: 650)",
+     get_shutdown_animation_ms, set_shutdown_animation_ms, NULL},
+    {"shutdown_feedback_ms", "100",
+     "Delay after shutdown bar completes: 0..2000 ms (default: 100)",
+     get_shutdown_feedback_ms, set_shutdown_feedback_ms, NULL},
+    {"auto_off_timeout_s", "300",
+     "Auto power-off timeout: 0 disables, 0..3600 s (default: 300)",
+     get_auto_off_timeout_s, set_auto_off_timeout_s, NULL},
 };
 
 static bool str_ieq(const char *a, const char *b) {
@@ -197,24 +236,38 @@ static void print_line(settings_registry_print_cb_t print_cb, void *user_data,
   }
 }
 
-static void print_setting(const setting_entry_t *entry,
+static bool setting_is_default(const setting_entry_t *entry, const char *value) {
+  return entry && entry->default_value && value &&
+         strcmp(value, entry->default_value) == 0;
+}
+
+static bool print_setting(const setting_entry_t *entry,
                           settings_registry_print_cb_t print_cb,
                           void *user_data, bool dump_format) {
   char value[64];
-  char line[160];
-  esp_err_t err = entry->get(value, sizeof(value));
+  char line[240];
+  setting_getter_t getter =
+      (dump_format && entry->dump_get) ? entry->dump_get : entry->get;
+  esp_err_t err = getter(value, sizeof(value));
   if (err == ESP_OK) {
     if (dump_format) {
+      if (setting_is_default(entry, value)) {
+        return false;
+      }
       snprintf(line, sizeof(line), "set %s %s\r\n", entry->name, value);
     } else {
-      snprintf(line, sizeof(line), "%-18s = %-10s ; %s\r\n", entry->name,
+      snprintf(line, sizeof(line), "%-26s = %-38s ; %s\r\n", entry->name,
                value, entry->help);
     }
   } else {
-    snprintf(line, sizeof(line), "%-18s = <err:%s> ; %s\r\n", entry->name,
+    if (dump_format) {
+      return false;
+    }
+    snprintf(line, sizeof(line), "%-26s = <err:%s> ; %s\r\n", entry->name,
              esp_err_to_name(err), entry->help);
   }
   print_line(print_cb, user_data, line);
+  return true;
 }
 
 esp_err_t settings_registry_get(const char *name, char *out, size_t out_len) {
@@ -243,8 +296,14 @@ void settings_registry_print_all(settings_registry_print_cb_t print_cb,
 
 void settings_registry_print_dump(settings_registry_print_cb_t print_cb,
                                   void *user_data) {
+  bool any = false;
   for (size_t i = 0; i < ARRAY_SIZE(settings); i++) {
-    print_setting(&settings[i], print_cb, user_data, true);
+    if (print_setting(&settings[i], print_cb, user_data, true)) {
+      any = true;
+    }
+  }
+  if (!any) {
+    print_line(print_cb, user_data, "# no non-default settings\r\n");
   }
 }
 
@@ -370,6 +429,74 @@ static esp_err_t set_haptic_intensity(const char *value, char *out,
 static esp_err_t get_ble_trim(char *out, size_t out_len) {
   snprintf(out, out_len, "%d", (int)ble_get_trim_offset());
   return ESP_OK;
+}
+
+static esp_err_t get_ble_pairing_phrase(char *out, size_t out_len) {
+  char phrase[BLE_PAIRING_PHRASE_MAX_LEN + 1];
+  esp_err_t err = ble_get_pairing_phrase(phrase, sizeof(phrase));
+  if (err != ESP_OK) {
+    return err;
+  }
+  uint32_t passkey = ble_get_pairing_passkey();
+  if (phrase[0] == '\0') {
+    snprintf(out, out_len, "not set; Derived BLE passkey: %06lu",
+             (unsigned long)passkey);
+  } else {
+    snprintf(out, out_len, "set; Derived BLE passkey: %06lu",
+             (unsigned long)passkey);
+  }
+  return ESP_OK;
+}
+
+static esp_err_t dump_get_ble_pairing_phrase(char *out, size_t out_len) {
+  return ble_get_pairing_phrase(out, out_len);
+}
+
+static esp_err_t set_ble_pairing_phrase(const char *value, char *out,
+                                        size_t out_len) {
+  esp_err_t err = ble_set_pairing_phrase(value);
+  if (err == ESP_OK) {
+    snprintf(out, out_len, "saved; Derived BLE passkey: %06lu",
+             (unsigned long)ble_get_pairing_passkey());
+  }
+  return err;
+}
+
+static esp_err_t get_ble_pairing_phrase_clear(char *out, size_t out_len) {
+  snprintf(out, out_len, "action");
+  return ESP_OK;
+}
+
+static esp_err_t set_ble_pairing_phrase_clear(const char *value, char *out,
+                                              size_t out_len) {
+  bool enabled = false;
+  if (!parse_bool(value, &enabled) || !enabled) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  esp_err_t err = ble_clear_pairing_phrase();
+  if (err == ESP_OK) {
+    snprintf(out, out_len, "cleared; Derived BLE passkey: %06lu",
+             (unsigned long)ble_get_pairing_passkey());
+  }
+  return err;
+}
+
+static esp_err_t get_ble_clear_bonds(char *out, size_t out_len) {
+  snprintf(out, out_len, "action");
+  return ESP_OK;
+}
+
+static esp_err_t set_ble_clear_bonds(const char *value, char *out,
+                                     size_t out_len) {
+  bool enabled = false;
+  if (!parse_bool(value, &enabled) || !enabled) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  esp_err_t err = ble_clear_bonds();
+  if (err == ESP_OK) {
+    snprintf(out, out_len, "cleared");
+  }
+  return err;
 }
 
 static esp_err_t set_ble_trim(const char *value, char *out, size_t out_len) {

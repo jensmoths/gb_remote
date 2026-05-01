@@ -17,6 +17,7 @@
 #include "viber.h"
 
 #define TAG "POWER"
+#define SHUTDOWN_DIM_BACKLIGHT_PERCENT 20
 
 /* --------------------------------------------------------------------------
  * State
@@ -49,6 +50,7 @@ power_mode_t power_get_mode(void) { return current_mode; }
 static bool power_check_wake_from_sleep(void);
 static void power_sleep_immediate(void);
 static void power_enter_sleep(void);
+static void power_dim_display_for_shutdown(void);
 
 /* One-shot timer callback: fade backlight up after charging screen is drawn */
 static void charging_screen_fade_up_timer_cb(lv_timer_t *timer) {
@@ -87,6 +89,14 @@ static void shutdown_completion_timer_cb(lv_timer_t *timer) {
 /* --------------------------------------------------------------------------
  * Shutdown bar animation (full mode): USB connected → charging screen
  * ----------------------------------------------------------------------- */
+static void power_dim_display_for_shutdown(void) {
+  uint8_t current_pwm = lcd_get_backlight();
+  uint8_t dim_pwm = (SHUTDOWN_DIM_BACKLIGHT_PERCENT * 255) / 100;
+  if (current_pwm > dim_pwm) {
+    lcd_set_backlight(dim_pwm);
+  }
+}
+
 static void set_bar_value(void *obj, int32_t v) {
   if (entering_power_off_mode) {
     return;
@@ -127,6 +137,7 @@ static void power_button_callback(button_event_t event, void *user_data) {
         arc_animation_active = false;
         shutdown_armed = false;
         lv_obj_add_flag(objects.power_lock, LV_OBJ_FLAG_HIDDEN);
+        lcd_fade_to_saved_brightness();
         lv_disp_load_scr(objects.home_screen);
         lv_obj_invalidate(objects.home_screen);
         give_lvgl_mutex();
@@ -187,6 +198,7 @@ static void power_button_callback(button_event_t event, void *user_data) {
       if (take_lvgl_mutex()) {
         lv_disp_load_scr(objects.shutdown_screen);
         lv_obj_invalidate(objects.shutdown_screen);
+        power_dim_display_for_shutdown();
         lv_anim_init(&arc_anim);
         lv_anim_set_var(&arc_anim, objects.shutting_down_bar);
         lv_anim_set_exec_cb(&arc_anim, set_bar_value);

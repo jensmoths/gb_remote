@@ -78,6 +78,26 @@ Both variants share the same core firmware with target-specific configurations.
 - **Protocol**: Custom BLE SPP for low-latency communication with receiver
 - **Data Exchange**: Throttle/brake commands from remote, VESC and BMS telemetry from receiver
 
+### BLE Pairing Phrase
+The receiver and remote can use a shared text pairing phrase. BLE SMP still uses a 6-digit numeric passkey internally; both sides derive that passkey from the exact phrase bytes using FNV-1a 32-bit and `hash % 1000000`.
+
+- Configure the **same phrase** on both `gb_receiver` and this remote.
+- The phrase is case-sensitive and may contain 1–32 printable characters.
+- If no phrase is configured on the remote, it remains backward-compatible with the legacy passkey `483265`.
+- After changing the phrase, remove/forget old BLE pairings on both sides and pair again.
+
+Remote CLI examples over USB serial:
+
+```text
+cli
+set ble_pairing_phrase my shared phrase
+get ble_pairing_phrase
+set ble_pairing_phrase_clear 1
+set ble_clear_bonds 1
+```
+
+`get ble_pairing_phrase` shows the derived numeric value, for example `Derived BLE passkey: 042317`, so it can be compared with the receiver UI.
+
 ### USB Serial Binary Protocol
 The remote communicates with the configuration tool via a binary protocol over USB Serial (USB CDC):
 
@@ -132,6 +152,7 @@ The configuration tool provides a comprehensive web-based interface for setting 
 - **Speed Unit Toggle**: Switch between km/h and mph display units
 - **Backlight Control**: Adjustable display brightness (0-100%)
 - **BLE Trim Adjustment**: Fine-tune BLE output offset for precise throttle control
+- **BLE Pairing Phrase**: Configure the receiver/remote pairing phrase via the USB serial CLI
 - **Odometer Management**: Reset trip distance counter
 - **Real-time Data Streaming**: Monitor live telemetry data at configurable rates (1-100 Hz)
 - **Status Monitoring**: Real-time device status and logs

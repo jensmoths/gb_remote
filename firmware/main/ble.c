@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "battery.h"
@@ -143,10 +144,14 @@ static float latest_temp_mos = 0.0f;
 static float latest_temp_motor = 0.0f;
 
 #define BLE_CMD_RESET_ODOMETER 0x01
+#define BLE_SECURITY_NVS_NAMESPACE "ble_sec"
+#define BLE_SECURITY_NVS_KEY_PHRASE "pair_phrase"
 
 static bool aux_output_state = false;
 static bool receiver_aux_output_state = false;
 static int8_t ble_trim_offset = 0; // Trim offset for BLE output (-127 to +127)
+static char ble_pairing_phrase[BLE_PAIRING_PHRASE_MAX_LEN + 1] = {0};
+static uint32_t ble_pairing_passkey = BLE_PASSKEY;
 static float latest_trip_km = 0.0f;
 
 /** When true, we are on charging screen (from full mode); no BLE activity. */
@@ -229,6 +234,173 @@ static esp_err_t ble_trim_save_offset(void) {
     err = nvs_commit(nvs_handle);
   }
   nvs_close(nvs_handle);
+  return err;
+}
+
+uint32_t ble_phrase_to_passkey(const char *phrase) {
+  uint32_t hash = 2166136261u;
+  for (const unsigned char *p = (const unsigned char *)phrase;
+       p != NULL && *p != '\0'; p++) {
+    hash ^= (uint32_t)(*p);
+    hash *= 16777619u;
+  }
+  return hash % 1000000u;
+}
+
+static bool ble_pairing_phrase_is_valid(const char *phrase) {
+  if (phrase == NULL) {
+    return false;
+  }
+  size_t len = strlen(phrase);
+  if (len < 1 || len > BLE_PAIRING_PHRASE_MAX_LEN) {
+    return false;
+  }
+  for (size_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)phrase[i];
+    if (c < 0x20 || c > 0x7E) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static void ble_update_pairing_passkey(void) {
+  if (ble_pairing_phrase[0] == '\0') {
+    ble_pairing_passkey = BLE_PASSKEY;
+  } else {
+    ble_pairing_passkey = ble_phrase_to_passkey(ble_pairing_phrase);
+  }
+}
+
+static void ble_apply_pairing_passkey(void) {
+  uint32_t passkey = ble_pairing_passkey;
+  if (esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_ENABLED) {
+    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_STATIC_PASSKEY, &passkey,
+                                   sizeof(uint32_t));
+  }
+}
+
+esp_err_t ble_pairing_init(void) {
+  nvs_handle_t nvs_handle;
+  esp_err_t err =
+      nvs_open(BLE_SECURITY_NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
+  if (err == ESP_ERR_NVS_NOT_FOUND) {
+    ble_pairing_phrase[0] = '\0';
+    err = ESP_OK;
+  } else if (err == ESP_OK) {
+    size_t len = sizeof(ble_pairing_phrase);
+    err = nvs_get_str(nvs_handle, BLE_SECURITY_NVS_KEY_PHRASE,
+                      ble_pairing_phrase, &len);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+      ble_pairing_phrase[0] = '\0';
+      err = ESP_OK;
+    } else if (err != ESP_OK || !ble_pairing_phrase_is_valid(ble_pairing_phrase)) {
+      ble_pairing_phrase[0] = '\0';
+    }
+    nvs_close(nvs_handle);
+  }
+  ble_update_pairing_passkey();
+  ESP_LOGI(GATTC_TAG, "BLE pairing phrase %s, passkey: %06lu",
+           ble_pairing_phrase[0] ? "configured" : "not configured",
+           (unsigned long)ble_pairing_passkey);
+  return err;
+}
+
+esp_err_t ble_get_pairing_phrase(char *out, size_t out_len) {
+  if (out == NULL || out_len == 0) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  snprintf(out, out_len, "%s", ble_pairing_phrase);
+  return ESP_OK;
+}
+
+uint32_t ble_get_pairing_passkey(void) { return ble_pairing_passkey; }
+
+esp_err_t ble_clear_bonds(void) {
+  if (esp_bluedroid_get_status() != ESP_BLUEDROID_STATUS_ENABLED) {
+    return ESP_OK;
+  }
+  int dev_num = esp_ble_get_bond_device_num();
+  if (dev_num <= 0) {
+    return ESP_OK;
+  }
+
+  esp_ble_bond_dev_t *dev_list = calloc(dev_num, sizeof(esp_ble_bond_dev_t));
+  if (dev_list == NULL) {
+    return ESP_ERR_NO_MEM;
+  }
+
+  esp_err_t err = esp_ble_get_bond_device_list(&dev_num, dev_list);
+  if (err == ESP_OK) {
+    for (int i = 0; i < dev_num; i++) {
+      esp_err_t remove_err = esp_ble_remove_bond_device(dev_list[i].bd_addr);
+      if (remove_err != ESP_OK && err == ESP_OK) {
+        err = remove_err;
+      }
+    }
+  }
+  free(dev_list);
+  return err;
+}
+
+esp_err_t ble_set_pairing_phrase(const char *phrase) {
+  if (!ble_pairing_phrase_is_valid(phrase)) {
+    return ESP_ERR_INVALID_ARG;
+  }
+
+  nvs_handle_t nvs_handle;
+  esp_err_t err =
+      nvs_open(BLE_SECURITY_NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
+  if (err != ESP_OK) {
+    return err;
+  }
+
+  err = nvs_set_str(nvs_handle, BLE_SECURITY_NVS_KEY_PHRASE, phrase);
+  if (err == ESP_OK) {
+    err = nvs_commit(nvs_handle);
+  }
+  nvs_close(nvs_handle);
+
+  if (err == ESP_OK) {
+    snprintf(ble_pairing_phrase, sizeof(ble_pairing_phrase), "%s", phrase);
+    ble_update_pairing_passkey();
+    ble_apply_pairing_passkey();
+    ble_clear_bonds();
+    ESP_LOGI(GATTC_TAG, "BLE pairing phrase saved, derived passkey: %06lu",
+             (unsigned long)ble_pairing_passkey);
+  }
+  return err;
+}
+
+esp_err_t ble_clear_pairing_phrase(void) {
+  nvs_handle_t nvs_handle;
+  esp_err_t err =
+      nvs_open(BLE_SECURITY_NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
+  if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+    return err;
+  }
+
+  if (err == ESP_OK) {
+    err = nvs_erase_key(nvs_handle, BLE_SECURITY_NVS_KEY_PHRASE);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+      err = ESP_OK;
+    }
+    if (err == ESP_OK) {
+      err = nvs_commit(nvs_handle);
+    }
+    nvs_close(nvs_handle);
+  } else {
+    err = ESP_OK;
+  }
+
+  if (err == ESP_OK) {
+    ble_pairing_phrase[0] = '\0';
+    ble_update_pairing_passkey();
+    ble_apply_pairing_passkey();
+    ble_clear_bonds();
+    ESP_LOGI(GATTC_TAG, "BLE pairing phrase cleared, using passkey: %06lu",
+             (unsigned long)ble_pairing_passkey);
+  }
   return err;
 }
 
@@ -555,12 +727,13 @@ static void esp_gap_cb(esp_gap_ble_cb_event_t event,
     esp_ble_gap_security_rsp(param->ble_security.ble_req.bd_addr, true);
     break;
 
-  case ESP_GAP_BLE_PASSKEY_REQ_EVT:
+  case ESP_GAP_BLE_PASSKEY_REQ_EVT: {
+    uint32_t passkey = ble_get_pairing_passkey();
     ESP_LOGI(GATTC_TAG, "ESP_GAP_BLE_PASSKEY_REQ_EVT - entering passkey: %06lu",
-             (unsigned long)BLE_PASSKEY);
-    esp_ble_passkey_reply(param->ble_security.ble_req.bd_addr, true,
-                          BLE_PASSKEY);
+             (unsigned long)passkey);
+    esp_ble_passkey_reply(param->ble_security.ble_req.bd_addr, true, passkey);
     break;
+  }
 
   case ESP_GAP_BLE_PASSKEY_NOTIF_EVT:
     ESP_LOGI(GATTC_TAG, "ESP_GAP_BLE_PASSKEY_NOTIF_EVT - passkey: %06lu",
@@ -1010,7 +1183,7 @@ void ble_client_appRegister(void) {
   uint8_t key_size = 16;
   uint8_t init_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
   uint8_t rsp_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
-  uint32_t passkey = BLE_PASSKEY;
+  uint32_t passkey = ble_get_pairing_passkey();
   uint8_t oob_support = ESP_BLE_OOB_DISABLE;
 
   esp_ble_gap_set_security_param(ESP_BLE_SM_SET_STATIC_PASSKEY, &passkey,
@@ -1128,8 +1301,9 @@ void spp_client_demo_init(void) {
   // Load aux output state from NVS
   aux_output_load_state();
 
-  // Load BLE trim offset from NVS
+  // Load BLE trim offset and pairing phrase from NVS
   ble_trim_load_offset();
+  ble_pairing_init();
 
   ret = esp_bt_controller_init(&bt_cfg);
   if (ret) {

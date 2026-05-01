@@ -39,6 +39,9 @@ static void init_system(void) {
   if (runtime_config_init() != ESP_OK) {
     ESP_LOGW(TAG, "Runtime config init failed, using defaults");
   }
+  if (ble_pairing_init() != ESP_OK) {
+    ESP_LOGW(TAG, "BLE pairing config init failed, using default passkey");
+  }
   if (vesc_config_init() != ESP_OK) {
     ESP_LOGW(TAG, "VESC config init failed, using defaults");
   }
