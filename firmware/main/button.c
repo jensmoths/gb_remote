@@ -6,6 +6,7 @@
 #include "freertos/task.h"
 #include "hw_config.h"
 #include "lvgl.h"
+#include "runtime_config.h"
 #include "ui.h"
 #include "ui_updater.h"
 #include <stdio.h>
@@ -83,6 +84,7 @@ static void button_monitor_task(void *pvParameters) {
   bool long_press_sent = false;
   bool power_off_armed = false;
   bool second_press_candidate = false;
+  bool shutdown_hold_candidate = false;
   TickType_t arm_start_time = 0;
 
   // On startup, if button is already pressed, wait for it to be released first
@@ -113,8 +115,9 @@ static void button_monitor_task(void *pvParameters) {
     } else if (first_press_registered) {
       uint32_t elapsed_ms =
           (xTaskGetTickCount() - last_release_time) * portTICK_PERIOD_MS;
-      uint32_t remaining_ms = elapsed_ms < button_cfg.double_press_time_ms
-                                  ? button_cfg.double_press_time_ms - elapsed_ms
+      uint32_t double_press_ms = runtime_config_get_button_double_press_ms();
+      uint32_t remaining_ms = elapsed_ms < double_press_ms
+                                  ? double_press_ms - elapsed_ms
                                   : 1;
       wait_time = pdMS_TO_TICKS(remaining_ms);
     } else if (power_off_armed) {
@@ -144,7 +147,7 @@ static void button_monitor_task(void *pvParameters) {
     if (first_press_registered && !current_state_pressed) {
       uint32_t elapsed_ms =
           (xTaskGetTickCount() - last_release_time) * portTICK_PERIOD_MS;
-      if (elapsed_ms >= button_cfg.double_press_time_ms) {
+      if (elapsed_ms >= runtime_config_get_button_double_press_ms()) {
         first_press_registered = false;
       }
     }
@@ -153,7 +156,7 @@ static void button_monitor_task(void *pvParameters) {
     if (power_off_armed && !current_state_pressed) {
       uint32_t elapsed_ms =
           (xTaskGetTickCount() - arm_start_time) * portTICK_PERIOD_MS;
-      if (elapsed_ms >= POWER_OFF_ARM_WINDOW_MS) {
+      if (elapsed_ms >= runtime_config_get_shutdown_arm_window_ms()) {
         power_off_armed = false;
         notify_callbacks(BUTTON_EVENT_POWER_OFF_CANCELLED);
       }
@@ -164,7 +167,7 @@ static void button_monitor_task(void *pvParameters) {
       bool within_double_press_window =
           first_press_registered &&
           ((current_time - last_release_time) * portTICK_PERIOD_MS <
-           button_cfg.double_press_time_ms);
+           runtime_config_get_button_double_press_ms());
 
       // A press inside the double-press window may become either:
       // 1) a quick second tap => double press on release
@@ -172,6 +175,7 @@ static void button_monitor_task(void *pvParameters) {
       // So do not cancel the already-sent shutdown arm yet. Only stop the
       // local arm timeout while this press is active.
       second_press_candidate = within_double_press_window;
+      shutdown_hold_candidate = power_off_armed;
       power_off_armed = false;
 
       press_start_time = current_time;
@@ -184,7 +188,10 @@ static void button_monitor_task(void *pvParameters) {
       // Button still held - check for long press
       uint32_t press_duration =
           (xTaskGetTickCount() - press_start_time) * portTICK_PERIOD_MS;
-      if (!long_press_sent && press_duration >= button_cfg.long_press_time_ms) {
+      uint32_t long_press_threshold_ms = shutdown_hold_candidate
+                                            ? runtime_config_get_shutdown_hold_ms()
+                                            : button_cfg.long_press_time_ms;
+      if (!long_press_sent && press_duration >= long_press_threshold_ms) {
         current_state = BUTTON_LONG_PRESS;
         long_press_sent = true;
 
@@ -205,6 +212,7 @@ static void button_monitor_task(void *pvParameters) {
           current_state = BUTTON_DOUBLE_PRESS;
           first_press_registered = false;
           second_press_candidate = false;
+          shutdown_hold_candidate = false;
           notify_callbacks(BUTTON_EVENT_POWER_OFF_CANCELLED);
           notify_callbacks(BUTTON_EVENT_DOUBLE_PRESS);
         } else {
@@ -223,6 +231,7 @@ static void button_monitor_task(void *pvParameters) {
         }
       } else {
         second_press_candidate = false;
+        shutdown_hold_candidate = false;
       }
 
       notify_callbacks(BUTTON_EVENT_RELEASED);

@@ -13,6 +13,7 @@
 #include "lcd.h"
 #include "nvs_flash.h"
 #include "power.h"
+#include "runtime_config.h"
 #include "throttle.h"
 #include "ui.h"
 #include "ui_updater.h"
@@ -35,6 +36,9 @@ static void init_nvs(void) {
 
 static void init_system(void) {
   init_nvs();
+  if (runtime_config_init() != ESP_OK) {
+    ESP_LOGW(TAG, "Runtime config init failed, using defaults");
+  }
   if (vesc_config_init() != ESP_OK) {
     ESP_LOGW(TAG, "VESC config init failed, using defaults");
   }

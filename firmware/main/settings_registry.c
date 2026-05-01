@@ -4,6 +4,7 @@
 #include "lcd.h"
 #include "nvs.h"
 #include "power.h"
+#include "runtime_config.h"
 #include "sdkconfig.h"
 #include "throttle.h"
 #include "ui_updater.h"
@@ -34,6 +35,24 @@ static esp_err_t set_invert_throttle(const char *value, char *out,
                                      size_t out_len);
 static esp_err_t get_aux_output(char *out, size_t out_len);
 static esp_err_t set_aux_output(const char *value, char *out, size_t out_len);
+static esp_err_t get_shutdown_hold_ms(char *out, size_t out_len);
+static esp_err_t set_shutdown_hold_ms(const char *value, char *out,
+                                      size_t out_len);
+static esp_err_t get_button_double_press_ms(char *out, size_t out_len);
+static esp_err_t set_button_double_press_ms(const char *value, char *out,
+                                            size_t out_len);
+static esp_err_t get_shutdown_arm_window_ms(char *out, size_t out_len);
+static esp_err_t set_shutdown_arm_window_ms(const char *value, char *out,
+                                            size_t out_len);
+static esp_err_t get_shutdown_animation_ms(char *out, size_t out_len);
+static esp_err_t set_shutdown_animation_ms(const char *value, char *out,
+                                           size_t out_len);
+static esp_err_t get_shutdown_feedback_ms(char *out, size_t out_len);
+static esp_err_t set_shutdown_feedback_ms(const char *value, char *out,
+                                          size_t out_len);
+static esp_err_t get_auto_off_timeout_s(char *out, size_t out_len);
+static esp_err_t set_auto_off_timeout_s(const char *value, char *out,
+                                        size_t out_len);
 
 typedef esp_err_t (*setting_getter_t)(char *out, size_t out_len);
 typedef esp_err_t (*setting_setter_t)(const char *value, char *out,
@@ -58,6 +77,18 @@ static const setting_entry_t settings[] = {
      get_invert_throttle, set_invert_throttle},
     {"aux_output", "Remembered auxiliary output state: on/off", get_aux_output,
      set_aux_output},
+    {"shutdown_hold_ms", "Shutdown hold time: 100..5000 ms",
+     get_shutdown_hold_ms, set_shutdown_hold_ms},
+    {"button_double_press_ms", "Double-press window: 50..1000 ms",
+     get_button_double_press_ms, set_button_double_press_ms},
+    {"shutdown_arm_window_ms", "Time after first tap to start shutdown hold: 300..10000 ms",
+     get_shutdown_arm_window_ms, set_shutdown_arm_window_ms},
+    {"shutdown_animation_ms", "Shutdown bar animation time: 100..10000 ms",
+     get_shutdown_animation_ms, set_shutdown_animation_ms},
+    {"shutdown_feedback_ms", "Delay after shutdown bar completes: 0..2000 ms",
+     get_shutdown_feedback_ms, set_shutdown_feedback_ms},
+    {"auto_off_timeout_s", "Auto power-off timeout: 0 disables, 0..3600 s",
+     get_auto_off_timeout_s, set_auto_off_timeout_s},
 };
 
 static bool str_ieq(const char *a, const char *b) {
@@ -86,6 +117,20 @@ static bool parse_i32(const char *value, int32_t min, int32_t max,
   }
   *out = (int32_t)parsed;
   return true;
+}
+
+static esp_err_t set_u32_setting(const char *value, char *out, size_t out_len,
+                                 uint32_t min, uint32_t max,
+                                 esp_err_t (*setter)(uint32_t)) {
+  int32_t parsed = 0;
+  if (!parse_i32(value, (int32_t)min, (int32_t)max, &parsed)) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  esp_err_t err = setter((uint32_t)parsed);
+  if (err == ESP_OK) {
+    snprintf(out, out_len, "%ld", (long)parsed);
+  }
+  return err;
 }
 
 static bool parse_bool(const char *value, bool *out) {
@@ -401,4 +446,81 @@ static esp_err_t set_aux_output(const char *value, char *out, size_t out_len) {
     snprintf(out, out_len, "%s", enabled ? "on" : "off");
   }
   return err;
+}
+
+static esp_err_t get_shutdown_hold_ms(char *out, size_t out_len) {
+  snprintf(out, out_len, "%lu", runtime_config_get_shutdown_hold_ms());
+  return ESP_OK;
+}
+
+static esp_err_t set_shutdown_hold_ms(const char *value, char *out,
+                                      size_t out_len) {
+  return set_u32_setting(value, out, out_len,
+                         RUNTIME_CONFIG_SHUTDOWN_HOLD_MIN_MS,
+                         RUNTIME_CONFIG_SHUTDOWN_HOLD_MAX_MS,
+                         runtime_config_set_shutdown_hold_ms);
+}
+
+static esp_err_t get_button_double_press_ms(char *out, size_t out_len) {
+  snprintf(out, out_len, "%lu", runtime_config_get_button_double_press_ms());
+  return ESP_OK;
+}
+
+static esp_err_t set_button_double_press_ms(const char *value, char *out,
+                                            size_t out_len) {
+  return set_u32_setting(value, out, out_len,
+                         RUNTIME_CONFIG_BUTTON_DOUBLE_PRESS_MIN_MS,
+                         RUNTIME_CONFIG_BUTTON_DOUBLE_PRESS_MAX_MS,
+                         runtime_config_set_button_double_press_ms);
+}
+
+static esp_err_t get_shutdown_arm_window_ms(char *out, size_t out_len) {
+  snprintf(out, out_len, "%lu", runtime_config_get_shutdown_arm_window_ms());
+  return ESP_OK;
+}
+
+static esp_err_t set_shutdown_arm_window_ms(const char *value, char *out,
+                                            size_t out_len) {
+  return set_u32_setting(value, out, out_len,
+                         RUNTIME_CONFIG_SHUTDOWN_ARM_WINDOW_MIN_MS,
+                         RUNTIME_CONFIG_SHUTDOWN_ARM_WINDOW_MAX_MS,
+                         runtime_config_set_shutdown_arm_window_ms);
+}
+
+static esp_err_t get_shutdown_animation_ms(char *out, size_t out_len) {
+  snprintf(out, out_len, "%lu", runtime_config_get_shutdown_animation_ms());
+  return ESP_OK;
+}
+
+static esp_err_t set_shutdown_animation_ms(const char *value, char *out,
+                                           size_t out_len) {
+  return set_u32_setting(value, out, out_len,
+                         RUNTIME_CONFIG_SHUTDOWN_ANIMATION_MIN_MS,
+                         RUNTIME_CONFIG_SHUTDOWN_ANIMATION_MAX_MS,
+                         runtime_config_set_shutdown_animation_ms);
+}
+
+static esp_err_t get_shutdown_feedback_ms(char *out, size_t out_len) {
+  snprintf(out, out_len, "%lu", runtime_config_get_shutdown_feedback_ms());
+  return ESP_OK;
+}
+
+static esp_err_t set_shutdown_feedback_ms(const char *value, char *out,
+                                          size_t out_len) {
+  return set_u32_setting(value, out, out_len,
+                         RUNTIME_CONFIG_SHUTDOWN_FEEDBACK_MIN_MS,
+                         RUNTIME_CONFIG_SHUTDOWN_FEEDBACK_MAX_MS,
+                         runtime_config_set_shutdown_feedback_ms);
+}
+
+static esp_err_t get_auto_off_timeout_s(char *out, size_t out_len) {
+  snprintf(out, out_len, "%lu", runtime_config_get_auto_off_timeout_s());
+  return ESP_OK;
+}
+
+static esp_err_t set_auto_off_timeout_s(const char *value, char *out,
+                                        size_t out_len) {
+  return set_u32_setting(value, out, out_len, RUNTIME_CONFIG_AUTO_OFF_MIN_S,
+                         RUNTIME_CONFIG_AUTO_OFF_MAX_S,
+                         runtime_config_set_auto_off_timeout_s);
 }

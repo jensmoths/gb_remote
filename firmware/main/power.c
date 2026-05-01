@@ -11,6 +11,7 @@
 #include "hw_config.h"
 #include "lcd.h"
 #include "lvgl.h"
+#include "runtime_config.h"
 #include "ui.h"
 #include "ui_updater.h"
 #include "viber.h"
@@ -101,8 +102,9 @@ static void set_bar_value(void *obj, int32_t v) {
     entering_power_off_mode = true;
     viber_play_pattern(VIBER_PATTERN_DOUBLE_SHORT);
 
-    lv_timer_t *t = lv_timer_create(shutdown_completion_timer_cb,
-                                    SHUTDOWN_FEEDBACK_DELAY_MS + 50, NULL);
+    lv_timer_t *t = lv_timer_create(
+        shutdown_completion_timer_cb,
+        runtime_config_get_shutdown_feedback_ms() + 50, NULL);
     lv_timer_set_repeat_count(t, 1);
   }
 }
@@ -188,7 +190,7 @@ static void power_button_callback(button_event_t event, void *user_data) {
         lv_anim_init(&arc_anim);
         lv_anim_set_var(&arc_anim, objects.shutting_down_bar);
         lv_anim_set_exec_cb(&arc_anim, set_bar_value);
-        lv_anim_set_time(&arc_anim, SHUTDOWN_ANIMATION_TIME);
+        lv_anim_set_time(&arc_anim, runtime_config_get_shutdown_animation_ms());
         lv_anim_set_values(&arc_anim, 0, 100);
         lv_anim_start(&arc_anim);
         arc_animation_active = true;
@@ -390,8 +392,9 @@ void power_check_inactivity(bool is_ble_connected) {
   TickType_t elapsed_time =
       (current_time - last_activity_time) * portTICK_PERIOD_MS;
 
-  if (!is_ble_connected && button_released_since_boot &&
-      elapsed_time >= INACTIVITY_TIMEOUT_MS) {
+  uint32_t auto_off_timeout_s = runtime_config_get_auto_off_timeout_s();
+  if (auto_off_timeout_s > 0 && !is_ble_connected && button_released_since_boot &&
+      elapsed_time >= (auto_off_timeout_s * 1000UL)) {
     ESP_LOGI(TAG, "Inactivity timeout reached (%u ms) - shutting down",
              (unsigned int)elapsed_time);
     power_shutdown();
