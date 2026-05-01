@@ -146,6 +146,8 @@ static float latest_temp_motor = 0.0f;
 #define BLE_CMD_RESET_ODOMETER 0x01
 #define BLE_SECURITY_NVS_NAMESPACE "ble_sec"
 #define BLE_SECURITY_NVS_KEY_PHRASE "pair_phrase"
+#define BLE_TELEMETRY_PACKET_LEN 65
+#define BLE_NOTIFY_HEX_DUMP_LEN 65
 
 static bool aux_output_state = false;
 static bool receiver_aux_output_state = false;
@@ -465,16 +467,30 @@ bool ble_get_receiver_aux_output_state(void) {
   return receiver_aux_output_state;
 }
 
-static void notify_event_handler(esp_ble_gattc_cb_param_t *p_data) {
-  uint8_t handle = 0;
-
-  if (p_data->notify.is_notify == true) {
-    ESP_LOGI(GATTC_TAG, "+NOTIFY:handle = %d,length = %d ",
-             p_data->notify.handle, p_data->notify.value_len);
-  } else {
-    ESP_LOGI(GATTC_TAG, "+INDICATE:handle = %d,length = %d ",
-             p_data->notify.handle, p_data->notify.value_len);
+static void log_notify_hex_dump(const uint8_t *data, uint16_t len) {
+  if (data == NULL || len == 0) {
+    return;
   }
+
+  uint16_t dump_len = len < BLE_NOTIFY_HEX_DUMP_LEN ? len : BLE_NOTIFY_HEX_DUMP_LEN;
+  char hex[(BLE_NOTIFY_HEX_DUMP_LEN * 3) + 1];
+  size_t pos = 0;
+  for (uint16_t i = 0; i < dump_len && pos + 4 < sizeof(hex); i++) {
+    pos += snprintf(&hex[pos], sizeof(hex) - pos, "%02X%s", data[i],
+                    (i + 1 < dump_len) ? " " : "");
+  }
+  hex[pos] = '\0';
+  ESP_LOGI(GATTC_TAG, "RX data notify first %u/%u bytes: %s",
+           (unsigned)dump_len, (unsigned)len, hex);
+}
+
+static void notify_event_handler(esp_ble_gattc_cb_param_t *p_data) {
+  uint16_t handle = 0;
+
+  ESP_LOGI(GATTC_TAG, "%s: handle=%u length=%u",
+           p_data->notify.is_notify ? "NOTIFY" : "INDICATE",
+           (unsigned)p_data->notify.handle,
+           (unsigned)p_data->notify.value_len);
 
   handle = p_data->notify.handle;
   if (db == NULL) {
@@ -496,8 +512,13 @@ static void notify_event_handler(esp_ble_gattc_cb_param_t *p_data) {
   }
 
   if (handle == db[SPP_IDX_SPP_DATA_NTY_VAL].attribute_handle) {
+    ESP_LOGI(GATTC_TAG, "RX data notify matched handle=%u expected_len=%u actual_len=%u",
+             (unsigned)handle, (unsigned)BLE_TELEMETRY_PACKET_LEN,
+             (unsigned)p_data->notify.value_len);
+    log_notify_hex_dump(p_data->notify.value, p_data->notify.value_len);
+
     if (p_data->notify.value_len ==
-        65) { // VESC + BMS + motor config + aux state + trip_km
+        BLE_TELEMETRY_PACKET_LEN) { // VESC + BMS + motor config + aux state + trip_km
       // First process VESC data (first 14 bytes)
       // All values are little-endian (LSB first, MSB second)
       // temp_mos (bytes 0-1)
@@ -564,6 +585,18 @@ static void notify_event_handler(esp_ble_gattc_cb_param_t *p_data) {
         bms_cell_voltages[i] = cell_voltage / 1000.0f; // Convert to volts
       }
 
+      float first_cell_voltage = bms_num_cells > 0 ? bms_cell_voltages[0] : 0.0f;
+      float last_cell_voltage =
+          bms_num_cells > 0
+              ? bms_cell_voltages[(bms_num_cells <= 16 ? bms_num_cells : 16) - 1]
+              : 0.0f;
+      ESP_LOGI(GATTC_TAG,
+               "RX BMS parsed: total=%.2fV current=%.2fA rem=%.2fAh "
+               "nominal=%.2fAh cells=%u first=%.3f last=%.3f",
+               bms_total_voltage, bms_current, bms_remaining_capacity,
+               bms_nominal_capacity, (unsigned)bms_num_cells,
+               first_cell_voltage, last_cell_voltage);
+
       // motor_poles (byte 55)
       uint8_t motor_poles = p_data->notify.value[55];
 
@@ -603,8 +636,9 @@ static void notify_event_handler(esp_ble_gattc_cb_param_t *p_data) {
                bms_total_voltage, bms_current, bms_remaining_capacity,
                bms_num_cells);
     } else {
-      ESP_LOGW(GATTC_TAG, "Unexpected data length: %d (expected 65)",
-               p_data->notify.value_len);
+      ESP_LOGW(GATTC_TAG, "Unexpected data notify length: %u (expected %u); BMS parse skipped",
+               (unsigned)p_data->notify.value_len,
+               (unsigned)BLE_TELEMETRY_PACKET_LEN);
     }
   }
 }
@@ -906,14 +940,18 @@ static void gattc_profile_event_handler(esp_gattc_cb_event_t event,
     esp_ble_gattc_send_mtu_req(gattc_if, spp_conn_id);
     break;
   case ESP_GATTC_REG_FOR_NOTIFY_EVT: {
-    ESP_LOGI(GATTC_TAG, "Index = %d,status = %d,handle = %d", cmd,
-             p_data->reg_for_notify.status, p_data->reg_for_notify.handle);
+    ESP_LOGI(GATTC_TAG, "Register notify complete: index=%d status=%d char_handle=%u cccd_handle=%u",
+             cmd, p_data->reg_for_notify.status,
+             (unsigned)p_data->reg_for_notify.handle,
+             db != NULL ? (unsigned)(db + cmd + 1)->attribute_handle : 0);
     if (p_data->reg_for_notify.status != ESP_GATT_OK) {
       ESP_LOGE(GATTC_TAG, "ESP_GATTC_REG_FOR_NOTIFY_EVT, status = %d",
                p_data->reg_for_notify.status);
       break;
     }
     uint16_t notify_en = 1;
+    ESP_LOGI(GATTC_TAG, "Writing notify CCCD: index=%d cccd_handle=%u value=0x%04x",
+             cmd, (unsigned)(db + cmd + 1)->attribute_handle, notify_en);
     esp_ble_gattc_write_char_descr(
         spp_gattc_if, spp_conn_id, (db + cmd + 1)->attribute_handle,
         sizeof(notify_en), (uint8_t *)&notify_en, ESP_GATT_WRITE_TYPE_NO_RSP,
@@ -1075,16 +1113,18 @@ void spp_client_reg_task(void *arg) {
     if (xQueueReceive(cmd_reg_queue, &cmd_id, portMAX_DELAY)) {
       if (db != NULL) {
         if (cmd_id == SPP_IDX_SPP_DATA_NTY_VAL) {
-          ESP_LOGI(GATTC_TAG, "Index = %d,UUID = 0x%04x, handle = %d", cmd_id,
+          ESP_LOGI(GATTC_TAG, "Registering data notify: index=%d UUID=0x%04x char_handle=%u cccd_handle=%u", cmd_id,
                    (db + SPP_IDX_SPP_DATA_NTY_VAL)->uuid.uuid.uuid16,
-                   (db + SPP_IDX_SPP_DATA_NTY_VAL)->attribute_handle);
+                   (unsigned)(db + SPP_IDX_SPP_DATA_NTY_VAL)->attribute_handle,
+                   (unsigned)(db + SPP_IDX_SPP_DATA_NTF_CFG)->attribute_handle);
           esp_ble_gattc_register_for_notify(
               spp_gattc_if, gl_profile_tab[PROFILE_APP_ID].remote_bda,
               (db + SPP_IDX_SPP_DATA_NTY_VAL)->attribute_handle);
         } else if (cmd_id == SPP_IDX_SPP_STATUS_VAL) {
-          ESP_LOGI(GATTC_TAG, "Index = %d,UUID = 0x%04x, handle = %d", cmd_id,
+          ESP_LOGI(GATTC_TAG, "Registering status notify: index=%d UUID=0x%04x char_handle=%u cccd_handle=%u", cmd_id,
                    (db + SPP_IDX_SPP_STATUS_VAL)->uuid.uuid.uuid16,
-                   (db + SPP_IDX_SPP_STATUS_VAL)->attribute_handle);
+                   (unsigned)(db + SPP_IDX_SPP_STATUS_VAL)->attribute_handle,
+                   (unsigned)(db + SPP_IDX_SPP_STATUS_CFG)->attribute_handle);
           esp_ble_gattc_register_for_notify(
               spp_gattc_if, gl_profile_tab[PROFILE_APP_ID].remote_bda,
               (db + SPP_IDX_SPP_STATUS_VAL)->attribute_handle);
@@ -1290,7 +1330,7 @@ static void spp_uart_init(void) {
 void spp_client_demo_init(void) {
   esp_err_t ret;
 
-  esp_log_level_set(GATTC_TAG, ESP_LOG_WARN);
+  esp_log_level_set(GATTC_TAG, ESP_LOG_INFO);
 
   ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
 

@@ -88,6 +88,7 @@ static void print_help(void) {
   cli_write("  get [name|pattern]           Show settings (* suffix allowed)\r\n");
   cli_write("  set <name> <value>           Set and save a setting\r\n");
   cli_write("  dump                         Print replayable set commands\r\n");
+  cli_write("  bms                          Show latest parsed BMS getter values\r\n");
   cli_write("  calibration show             Show calibration values\r\n");
   cli_write("  calibrate                    Run throttle/brake calibration\r\n");
   cli_write("  boot                         Leave charging mode and boot full app\r\n");
@@ -106,6 +107,22 @@ static void print_status(void) {
   serial_terminal_printf("calibrated: %s\r\n",
                          throttle_is_calibrated() ? "yes" : "no");
   settings_registry_print_all(print_cb, NULL);
+}
+
+static void print_bms_diagnostics(void) {
+  uint8_t cells = get_bms_num_cells();
+  float first_cell = cells > 0 ? get_bms_cell_voltage(0) : 0.0f;
+  float last_cell = cells > 0 ? get_bms_cell_voltage(cells - 1) : 0.0f;
+  serial_terminal_printf(
+      "BMS getters: total=%.2fV current=%.2fA rem=%.2fAh nominal=%.2fAh "
+      "cells=%u first=%.3f last=%.3f pct=%d\r\n",
+      get_bms_total_voltage(), get_bms_current(), get_bms_remaining_capacity(),
+      get_bms_nominal_capacity(), (unsigned)cells, first_cell, last_cell,
+      get_bms_battery_percentage());
+  serial_terminal_printf(
+      "VESC/receiver fallback: vesc_voltage=%.2fV ble=%s connected_trip=%.2fkm\r\n",
+      get_latest_voltage(), ble_is_connected() ? "connected" : "disconnected",
+      ble_get_latest_trip_km());
 }
 
 static void print_calibration(void) {
@@ -159,6 +176,8 @@ static void execute_line(char *line) {
     print_status();
   } else if (streq(cmd, "dump")) {
     settings_registry_print_dump(print_cb, NULL);
+  } else if (streq(cmd, "bms")) {
+    print_bms_diagnostics();
   } else if (streq(cmd, "get")) {
     if (arg1 && *arg1) {
       settings_registry_print_matching(arg1, print_cb, NULL);
