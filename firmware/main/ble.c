@@ -1245,7 +1245,7 @@ void ble_client_appRegister(void) {
            (unsigned long)passkey);
 
   cmd_reg_queue = xQueueCreate(10, sizeof(uint32_t));
-  xTaskCreate(spp_client_reg_task, "spp_client_reg_task", 2048, NULL, 10, NULL);
+  xTaskCreate(spp_client_reg_task, "spp_client_reg_task", 4096, NULL, 10, NULL);
 
 #ifdef SUPPORT_HEARTBEAT
   cmd_heartbeat_queue = xQueueCreate(10, sizeof(uint32_t));
